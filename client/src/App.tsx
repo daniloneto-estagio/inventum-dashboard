@@ -3,7 +3,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
-import PasswordGate from "./components/PasswordGate";
+import AuthGate from "./components/AuthGate";
+import { AuthProvider } from "./contexts/AuthContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 
@@ -23,9 +24,11 @@ function App() {
       <ThemeProvider defaultTheme="light">
         <TooltipProvider>
           <Toaster />
-          <PasswordGate>
-            <Router />
-          </PasswordGate>
+          <AuthProvider>
+            <AuthGate>
+              <Router />
+            </AuthGate>
+          </AuthProvider>
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>

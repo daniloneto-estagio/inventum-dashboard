@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "./supabaseClient";
+import type { CurrentUser } from "../contexts/AuthContext";
 
 export type Frente = { id: number; nome: string; cor: string; ordem: number };
+
+export type AuditFields = {
+  prazo: string | null;
+  lastModifiedByEmail: string | null;
+  lastModifiedByName: string | null;
+  lastModifiedByAvatar: string | null;
+  lastModifiedAt: string | null;
+};
 
 export type Activity = {
   id: number;
@@ -20,10 +29,10 @@ export type Activity = {
   horario: string;
   dias: Record<string, boolean>;
   frenteId: number | null;
-};
+} & AuditFields;
 
 export type Demand = { id: number; entidade: string; necessidade: string; proposta: string };
-export type Pending = { id: number; texto: string; concluida: boolean };
+export type Pending = { id: number; texto: string; concluida: boolean } & AuditFields;
 
 export type InventumData = { frentes: Frente[]; activities: Activity[]; demands: Demand[]; pending: Pending[] };
 
@@ -31,6 +40,16 @@ const EMPTY: InventumData = { frentes: [], activities: [], demands: [], pending:
 
 function frenteFromRow(row: any): Frente {
   return { id: row.id, nome: row.nome, cor: row.cor, ordem: row.ordem };
+}
+
+function auditFromRow(row: any): AuditFields {
+  return {
+    prazo: row.prazo ?? null,
+    lastModifiedByEmail: row.last_modified_by_email ?? null,
+    lastModifiedByName: row.last_modified_by_name ?? null,
+    lastModifiedByAvatar: row.last_modified_by_avatar ?? null,
+    lastModifiedAt: row.last_modified_at ?? null,
+  };
 }
 
 function activityFromRow(row: any): Activity {
@@ -51,6 +70,7 @@ function activityFromRow(row: any): Activity {
     horario: row.horario,
     dias: row.dias ?? {},
     frenteId: row.frente_id,
+    ...auditFromRow(row),
   };
 }
 
@@ -71,6 +91,7 @@ function activityToRow(value: Activity) {
     horario: value.horario,
     dias: value.dias,
     frente_id: value.frenteId,
+    prazo: value.prazo,
   };
 }
 
@@ -79,7 +100,11 @@ function demandFromRow(row: any): Demand {
 }
 
 function pendingFromRow(row: any): Pending {
-  return { id: row.id, texto: row.texto, concluida: row.concluida };
+  return { id: row.id, texto: row.texto, concluida: row.concluida, ...auditFromRow(row) };
+}
+
+function pendingToRow(value: Pending) {
+  return { texto: value.texto, concluida: value.concluida, prazo: value.prazo };
 }
 
 async function fetchAll(): Promise<InventumData> {
@@ -101,7 +126,17 @@ async function fetchAll(): Promise<InventumData> {
   };
 }
 
-export function useInventumData() {
+function stampFields(user: CurrentUser | null) {
+  if (!user) return {};
+  return {
+    last_modified_by_email: user.email,
+    last_modified_by_name: user.name,
+    last_modified_by_avatar: user.avatarUrl,
+    last_modified_at: new Date().toISOString(),
+  };
+}
+
+export function useInventumData(user: CurrentUser | null) {
   const [data, setData] = useState<InventumData>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -139,13 +174,16 @@ export function useInventumData() {
   }, []);
 
   const addActivity = async (value: Activity) => {
-    const { error: err } = await supabase.from("activities").insert(activityToRow(value));
+    const { error: err } = await supabase.from("activities").insert({ ...activityToRow(value), ...stampFields(user) });
     if (err) throw err;
     refetch();
   };
 
   const updateActivity = async (value: Activity) => {
-    const { error: err } = await supabase.from("activities").update(activityToRow(value)).eq("id", value.id);
+    const { error: err } = await supabase
+      .from("activities")
+      .update({ ...activityToRow(value), ...stampFields(user) })
+      .eq("id", value.id);
     if (err) throw err;
     refetch();
   };
@@ -208,12 +246,19 @@ export function useInventumData() {
     refetch();
   };
 
+  const updatePending = async (value: Pending) => {
+    const { error: err } = await supabase
+      .from("pending")
+      .update({ ...pendingToRow(value), ...stampFields(user) })
+      .eq("id", value.id);
+    if (err) throw err;
+    refetch();
+  };
+
   const togglePending = async (id: number) => {
     const current = data.pending.find((item) => item.id === id);
     if (!current) return;
-    const { error: err } = await supabase.from("pending").update({ concluida: !current.concluida }).eq("id", id);
-    if (err) throw err;
-    refetch();
+    await updatePending({ ...current, concluida: !current.concluida });
   };
 
   const importBackup = async (next: InventumData) => {
@@ -236,7 +281,7 @@ export function useInventumData() {
     if (next.pending.length) {
       const { error: err } = await supabase
         .from("pending")
-        .upsert(next.pending.map((p) => ({ id: p.id, texto: p.texto, concluida: p.concluida })));
+        .upsert(next.pending.map((p) => ({ id: p.id, ...pendingToRow(p) })));
       if (err) throw err;
     }
     refetch();
@@ -255,6 +300,7 @@ export function useInventumData() {
     addDemand,
     updateDemand,
     togglePending,
+    updatePending,
     importBackup,
   };
 }

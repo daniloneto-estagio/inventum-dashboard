@@ -27,6 +27,11 @@ create table if not exists activities (
   horario text not null default '',
   dias jsonb not null default '{}'::jsonb,
   frente_id integer references frentes(id) on delete set null,
+  prazo date,
+  last_modified_by_email text,
+  last_modified_by_name text,
+  last_modified_by_avatar text,
+  last_modified_at timestamptz,
   created_at timestamptz not null default now()
 );
 
@@ -42,30 +47,43 @@ create table if not exists pending (
   id serial primary key,
   texto text not null default '',
   concluida boolean not null default false,
+  prazo date,
+  last_modified_by_email text,
+  last_modified_by_name text,
+  last_modified_by_avatar text,
+  last_modified_at timestamptz,
   created_at timestamptz not null default now()
 );
 
 create index if not exists activities_frente_id_idx on activities(frente_id);
 
--- RLS habilitado, mas com policy aberta: o controle de acesso real é a senha de
--- equipe checada no app (não há login individual), então aqui só protegemos
--- contra acesso por engano fora da anon key do projeto.
+-- RLS habilitado: o acesso é individual via login Google (Supabase Auth), restrito
+-- a contas do domínio da equipe. Qualquer usuário autenticado desse domínio pode
+-- ler/escrever nas 4 tabelas (sem posse por linha, é um painel de equipe).
 alter table frentes enable row level security;
 alter table activities enable row level security;
 alter table demands enable row level security;
 alter table pending enable row level security;
 
 drop policy if exists "frentes_all" on frentes;
-create policy "frentes_all" on frentes for all using (true) with check (true);
+create policy "frentes_all" on frentes for all
+  using (auth.jwt() ->> 'email' like '%@patobranco.tec.br')
+  with check (auth.jwt() ->> 'email' like '%@patobranco.tec.br');
 
 drop policy if exists "activities_all" on activities;
-create policy "activities_all" on activities for all using (true) with check (true);
+create policy "activities_all" on activities for all
+  using (auth.jwt() ->> 'email' like '%@patobranco.tec.br')
+  with check (auth.jwt() ->> 'email' like '%@patobranco.tec.br');
 
 drop policy if exists "demands_all" on demands;
-create policy "demands_all" on demands for all using (true) with check (true);
+create policy "demands_all" on demands for all
+  using (auth.jwt() ->> 'email' like '%@patobranco.tec.br')
+  with check (auth.jwt() ->> 'email' like '%@patobranco.tec.br');
 
 drop policy if exists "pending_all" on pending;
-create policy "pending_all" on pending for all using (true) with check (true);
+create policy "pending_all" on pending for all
+  using (auth.jwt() ->> 'email' like '%@patobranco.tec.br')
+  with check (auth.jwt() ->> 'email' like '%@patobranco.tec.br');
 
 -- Habilita Supabase Realtime para as 4 tabelas (edições aparecem ao vivo pra todo mundo).
 -- Alguns projetos Supabase já colocam tabelas novas na publicação automaticamente,
