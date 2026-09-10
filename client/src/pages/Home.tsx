@@ -35,6 +35,8 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useAuth } from "../contexts/AuthContext";
 import { useInventumData, type Activity, type Demand, type Frente } from "../lib/useInventumData";
 
 type Tab = "overview" | "activities" | "frentes" | "demands" | "pending";
@@ -68,6 +70,42 @@ function percent(value: number, total: number) {
 
 function compactText(value: string, length = 74) {
   return value.length > length ? `${value.slice(0, length).trim()}…` : value;
+}
+
+function daysUntil(prazo: string) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(`${prazo}T00:00:00`);
+  return Math.round((target.getTime() - today.getTime()) / 86400000);
+}
+
+function formatPrazo(prazo: string) {
+  const [year, month, day] = prazo.split("-");
+  return `${day}/${month}`;
+}
+
+function PrazoBadge({ prazo }: { prazo: string | null }) {
+  if (!prazo) return <span className="type-label">Sem prazo</span>;
+  const delta = daysUntil(prazo);
+  const tone = delta < 0 ? "coral" : delta <= 3 ? "amber" : "slate";
+  return (
+    <span className={`status-pill status-${tone}`}>
+      <span className="status-dot" />
+      {formatPrazo(prazo)}
+      {delta < 0 ? " · vencido" : delta === 0 ? " · hoje" : delta <= 3 ? ` · ${delta}d` : ""}
+    </span>
+  );
+}
+
+function EditedByAvatar({ name, avatarUrl, at }: { name: string | null; avatarUrl: string | null; at: string | null }) {
+  if (!name) return <span className="type-label">—</span>;
+  const initials = name.split(" ").map((part) => part[0]).slice(0, 2).join("").toUpperCase();
+  const when = at ? new Date(at).toLocaleString("pt-BR") : "";
+  return (
+    <span title={`Editado por ${name}${when ? ` em ${when}` : ""}`} className="avatar" style={{ overflow: "hidden" }}>
+      {avatarUrl ? <img src={avatarUrl} alt={name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : initials}
+    </span>
+  );
 }
 
 function downloadFile(name: string, content: string, type: string) {
@@ -190,6 +228,11 @@ function ActivityModal({
     horario: "",
     dias: Object.fromEntries(eventDays.map((day) => [day.key, false])),
     frenteId: null,
+    prazo: null,
+    lastModifiedByEmail: null,
+    lastModifiedByName: null,
+    lastModifiedByAvatar: null,
+    lastModifiedAt: null,
   });
   const [newFrenteName, setNewFrenteName] = useState("");
   const [showNewFrente, setShowNewFrente] = useState(false);
@@ -257,6 +300,7 @@ function ActivityModal({
           <label className="field"><span>Situação</span><select value={form.situacao} onChange={(e) => update("situacao", e.target.value)}><option>Confirmado</option><option>Em Análise</option></select></label>
           <label className="field"><span>Status operacional</span><input value={form.status} onChange={(e) => update("status", e.target.value)} placeholder="Ex.: Validado" /></label>
           <label className="field"><span>Horário</span><input value={form.horario} onChange={(e) => update("horario", e.target.value)} placeholder="Tempo todo ou faixa horária" /></label>
+          <label className="field"><span>Prazo</span><input type="date" value={form.prazo ?? ""} onChange={(e) => setForm((current) => ({ ...current, prazo: e.target.value || null }))} /></label>
           <label className="field field-span-2"><span>Local</span><input value={form.local} onChange={(e) => update("local", e.target.value)} placeholder="Centro de Eventos / área externa" /></label>
           <label className="field"><span>Tipo do local</span><input value={form.tipoLocal} onChange={(e) => update("tipoLocal", e.target.value)} placeholder="Interno" /></label>
           <label className="field"><span>Cód. mapa</span><input value={form.codigoMapa} onChange={(e) => update("codigoMapa", e.target.value)} placeholder="Ex.: 77, 78" /></label>
@@ -426,6 +470,7 @@ function FrentesManager({
 }
 
 export default function Home() {
+  const { user, signOut } = useAuth();
   const {
     data,
     loading,
@@ -439,10 +484,12 @@ export default function Home() {
     addDemand,
     updateDemand,
     togglePending,
+    updatePending,
     importBackup,
-  } = useInventumData();
+  } = useInventumData(user);
 
   const [tab, setTab] = useState<Tab>("overview");
+  const [onlyMine, setOnlyMine] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("Todos os status");
   const [typeFilter, setTypeFilter] = useState("Todos os tipos");
@@ -496,6 +543,22 @@ export default function Home() {
     ].sort((a, b) => b.count - a.count);
     return { confirmed, valid, activeDays, byType, byStatus, byFrente };
   }, [data.activities, data.frentes]);
+
+  const notifications = useMemo(() => {
+    const matchesUser = (responsavel: string) => {
+      if (!user) return false;
+      const term = responsavel.toLocaleLowerCase();
+      return Boolean(term) && (term.includes(user.name.toLocaleLowerCase()) || term.includes(user.email.toLocaleLowerCase()));
+    };
+    const activityItems = data.activities
+      .filter((item) => item.prazo && daysUntil(item.prazo) <= 3)
+      .filter((item) => !onlyMine || matchesUser(item.responsavel))
+      .map((item) => ({ kind: "activity" as const, id: item.id, title: item.atividade, prazo: item.prazo as string }));
+    const pendingItems = data.pending
+      .filter((item) => item.prazo && !item.concluida && daysUntil(item.prazo) <= 3)
+      .map((item) => ({ kind: "pending" as const, id: item.id, title: item.texto, prazo: item.prazo as string }));
+    return [...(onlyMine ? [] : pendingItems), ...activityItems].sort((a, b) => a.prazo.localeCompare(b.prazo));
+  }, [data.activities, data.pending, onlyMine, user]);
 
   const saveActivity = async (value: Activity) => {
     try {
@@ -601,11 +664,37 @@ export default function Home() {
           <button onClick={() => fileInput.current?.click()}><Upload size={16} /> Importar backup</button>
           <input ref={fileInput} type="file" accept="application/json" hidden onChange={(event) => event.target.files?.[0] && importJson(event.target.files[0])} />
         </div>
-        <div className="sidebar-bottom"><div className="sync-badge"><span className="live-dot" />Sincronizado com a equipe</div><button className="profile-row"><span className="avatar">OP</span><span><b>Operação</b><small>INVENTUM 2026</small></span><MoreHorizontal size={16} /></button></div>
+        <div className="sidebar-bottom"><div className="sync-badge"><span className="live-dot" />Sincronizado com a equipe</div><button className="profile-row" onClick={() => window.confirm("Sair da conta?") && signOut()}><span className="avatar" style={{ overflow: "hidden" }}>{user?.avatarUrl ? <img src={user.avatarUrl} alt={user.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : (user?.name.slice(0, 2).toUpperCase() ?? "OP")}</span><span><b>{user?.name ?? "Operação"}</b><small>{user?.email ?? "INVENTUM 2026"}</small></span><MoreHorizontal size={16} /></button></div>
       </aside>
 
       <main className="main-content">
-        <header className="topbar"><button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)} aria-label="Abrir menu"><Menu size={21} /></button><div className="breadcrumb"><span>INVENTUM 2026</span><ChevronDown size={14} /><b>{navItems.find((item) => item.id === tab)?.label}</b></div><div className="topbar-actions"><span className="date-chip"><CalendarDays size={15} /> 04 — 08 NOV 2026</span><button className="top-icon"><Bell size={17} /><i /></button><button className="top-icon"><Settings2 size={17} /></button></div></header>
+        <header className="topbar"><button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)} aria-label="Abrir menu"><Menu size={21} /></button><div className="breadcrumb"><span>INVENTUM 2026</span><ChevronDown size={14} /><b>{navItems.find((item) => item.id === tab)?.label}</b></div><div className="topbar-actions"><span className="date-chip"><CalendarDays size={15} /> 04 — 08 NOV 2026</span>
+          <Popover>
+            <PopoverTrigger asChild>
+              <button className="top-icon" aria-label="Notificações"><Bell size={17} />{notifications.length > 0 ? <i /> : null}</button>
+            </PopoverTrigger>
+            <PopoverContent align="end" style={{ background: "#fffdf9", border: "1px solid var(--line)", borderRadius: 12, padding: 0, width: 320 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
+                <strong style={{ fontSize: 12, color: "var(--ink)" }}>Prazos próximos</strong>
+                <button className="filter-toggle" style={onlyMine ? { background: "#edf3c9", borderColor: "#d9eaa1", color: "#4c6736" } : undefined} onClick={() => setOnlyMine((value) => !value)}>Somente minhas</button>
+              </div>
+              <div style={{ maxHeight: 320, overflowY: "auto" }}>
+                {notifications.length === 0 ? (
+                  <div style={{ padding: "18px 14px", fontSize: 11, color: "#9aa3a1" }}>Nenhum prazo vencido ou próximo.</div>
+                ) : notifications.map((item) => (
+                  <button
+                    key={`${item.kind}-${item.id}`}
+                    onClick={() => setTab(item.kind === "activity" ? "activities" : "pending")}
+                    style={{ display: "flex", width: "100%", alignItems: "center", gap: 10, textAlign: "left", padding: "10px 14px", borderBottom: "1px solid #eeeae2", background: "transparent" }}
+                  >
+                    <span style={{ flex: 1, fontSize: 11, color: "#56666b" }}>{compactText(item.title, 46)}</span>
+                    <PrazoBadge prazo={item.prazo} />
+                  </button>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+          <button className="top-icon"><Settings2 size={17} /></button></div></header>
 
         <div className="page-content">
           {tab === "overview" ? <>
@@ -634,7 +723,7 @@ export default function Home() {
             </div>
           </> : null}
 
-          {tab === "activities" ? <section className="content-section"><SectionTitle eyebrow="MATRIZ OPERACIONAL" title="Atividades" description="Edite os registros da programação e acompanhe a situação de cada entrega." action={<button className="button button-dark" onClick={() => setActivityEditor(null)}><Plus size={16} /> Nova atividade</button>} /><div className="filter-bar"><div className="search-field"><Search size={17} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar atividade, local ou entidade…" /></div><div className="select-wrap"><Filter size={15} /><select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>{types.map((type) => <option key={type}>{type}</option>)}</select></div><div className="select-wrap"><Flag size={15} /><select value={frenteFilter} onChange={(e) => setFrenteFilter(e.target.value)}>{frenteFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div><div className="select-wrap"><MapPin size={15} /><select value={locationFilter} onChange={(e) => setLocationFilter(e.target.value)}>{locations.map((location) => <option key={location}>{location}</option>)}</select></div><div className="select-wrap"><CalendarDays size={15} /><select value={dayFilter} onChange={(e) => setDayFilter(e.target.value)}>{days.map((day) => <option key={day}>{day}</option>)}</select></div><div className="select-wrap"><CircleDot size={15} /><select value={situationFilter} onChange={(e) => setSituationFilter(e.target.value)}>{situations.map((situation) => <option key={situation}>{situation}</option>)}</select></div><div className="select-wrap"><ListFilter size={15} /><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>{statuses.map((status) => <option key={status}>{status}</option>)}</select></div>{(search || statusFilter !== "Todos os status" || typeFilter !== "Todos os tipos" || locationFilter !== "Todos os locais" || dayFilter !== "Todos os dias" || situationFilter !== "Todas as situações" || frenteFilter !== "all") ? <button className="clear-filter" onClick={() => { setSearch(""); setStatusFilter("Todos os status"); setTypeFilter("Todos os tipos"); setLocationFilter("Todos os locais"); setDayFilter("Todos os dias"); setSituationFilter("Todas as situações"); setFrenteFilter("all"); }}>Limpar</button> : null}</div><div className="table-panel"><div className="table-meta"><span><b>{filteredActivities.length}</b> de {data.activities.length} atividades</span><span className="table-hint"><Pencil size={13} /> Clique em editar para atualizar a base</span></div><div className="table-scroll"><table><thead><tr><th>Atividade</th><th>Frente</th><th>Tipo</th><th>Local</th><th>Dias</th><th>Situação</th><th>Status operacional</th><th /></tr></thead><tbody>{filteredActivities.map((item) => <tr key={item.id}><td><div className="activity-cell"><span className="activity-bullet" /><div><b>{item.atividade}</b><small>{item.realizadoPor || "Realizador não informado"}</small></div></div></td><td><FrenteBadge frente={item.frenteId ? frenteById.get(item.frenteId) : undefined} /></td><td><span className="type-label">{item.tipo || "—"}</span></td><td><div className="location-cell"><MapPin size={13} /><span>{compactText(item.local || "Local a definir", 36)}</span></div></td><td><div className="day-mini-list">{eventDays.map((day) => <span key={day.key} className={item.dias[day.key] ? "on" : ""}>{day.weekday.slice(0, 1)}</span>)}</div></td><td><span className={`situation-tag ${item.situacao === "Confirmado" ? "confirmed" : "analysis"}`}>{item.situacao || "Sem situação"}</span></td><td><StatusPill value={item.status} /></td><td><button className="row-edit" onClick={() => setActivityEditor(item)}><Pencil size={14} /> Editar</button></td></tr>)}</tbody></table>{filteredActivities.length === 0 ? <EmptyState title="Nenhum registro encontrado" description="Ajuste os filtros para ampliar a busca." /> : null}</div></div></section> : null}
+          {tab === "activities" ? <section className="content-section"><SectionTitle eyebrow="MATRIZ OPERACIONAL" title="Atividades" description="Edite os registros da programação e acompanhe a situação de cada entrega." action={<button className="button button-dark" onClick={() => setActivityEditor(null)}><Plus size={16} /> Nova atividade</button>} /><div className="filter-bar"><div className="search-field"><Search size={17} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar atividade, local ou entidade…" /></div><div className="select-wrap"><Filter size={15} /><select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>{types.map((type) => <option key={type}>{type}</option>)}</select></div><div className="select-wrap"><Flag size={15} /><select value={frenteFilter} onChange={(e) => setFrenteFilter(e.target.value)}>{frenteFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div><div className="select-wrap"><MapPin size={15} /><select value={locationFilter} onChange={(e) => setLocationFilter(e.target.value)}>{locations.map((location) => <option key={location}>{location}</option>)}</select></div><div className="select-wrap"><CalendarDays size={15} /><select value={dayFilter} onChange={(e) => setDayFilter(e.target.value)}>{days.map((day) => <option key={day}>{day}</option>)}</select></div><div className="select-wrap"><CircleDot size={15} /><select value={situationFilter} onChange={(e) => setSituationFilter(e.target.value)}>{situations.map((situation) => <option key={situation}>{situation}</option>)}</select></div><div className="select-wrap"><ListFilter size={15} /><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>{statuses.map((status) => <option key={status}>{status}</option>)}</select></div>{(search || statusFilter !== "Todos os status" || typeFilter !== "Todos os tipos" || locationFilter !== "Todos os locais" || dayFilter !== "Todos os dias" || situationFilter !== "Todas as situações" || frenteFilter !== "all") ? <button className="clear-filter" onClick={() => { setSearch(""); setStatusFilter("Todos os status"); setTypeFilter("Todos os tipos"); setLocationFilter("Todos os locais"); setDayFilter("Todos os dias"); setSituationFilter("Todas as situações"); setFrenteFilter("all"); }}>Limpar</button> : null}</div><div className="table-panel"><div className="table-meta"><span><b>{filteredActivities.length}</b> de {data.activities.length} atividades</span><span className="table-hint"><Pencil size={13} /> Clique em editar para atualizar a base</span></div><div className="table-scroll"><table><thead><tr><th>Atividade</th><th>Frente</th><th>Tipo</th><th>Local</th><th>Dias</th><th>Prazo</th><th>Situação</th><th>Status operacional</th><th>Editado por</th><th /></tr></thead><tbody>{filteredActivities.map((item) => <tr key={item.id}><td><div className="activity-cell"><span className="activity-bullet" /><div><b>{item.atividade}</b><small>{item.realizadoPor || "Realizador não informado"}</small></div></div></td><td><FrenteBadge frente={item.frenteId ? frenteById.get(item.frenteId) : undefined} /></td><td><span className="type-label">{item.tipo || "—"}</span></td><td><div className="location-cell"><MapPin size={13} /><span>{compactText(item.local || "Local a definir", 36)}</span></div></td><td><div className="day-mini-list">{eventDays.map((day) => <span key={day.key} className={item.dias[day.key] ? "on" : ""}>{day.weekday.slice(0, 1)}</span>)}</div></td><td><PrazoBadge prazo={item.prazo} /></td><td><span className={`situation-tag ${item.situacao === "Confirmado" ? "confirmed" : "analysis"}`}>{item.situacao || "Sem situação"}</span></td><td><StatusPill value={item.status} /></td><td><EditedByAvatar name={item.lastModifiedByName} avatarUrl={item.lastModifiedByAvatar} at={item.lastModifiedAt} /></td><td><button className="row-edit" onClick={() => setActivityEditor(item)}><Pencil size={14} /> Editar</button></td></tr>)}</tbody></table>{filteredActivities.length === 0 ? <EmptyState title="Nenhum registro encontrado" description="Ajuste os filtros para ampliar a busca." /> : null}</div></div></section> : null}
 
           {tab === "frentes" ? (
             <FrentesManager
@@ -648,7 +737,7 @@ export default function Home() {
 
           {tab === "demands" ? <section className="content-section"><SectionTitle eyebrow="MAPA DE ARTICULAÇÃO" title="Entidades & demandas" description="Centralize o que cada parceiro precisa e o que está sendo proposto para a INVENTUM." action={<button className="button button-dark" onClick={() => setDemandEditor(null)}><Plus size={16} /> Nova entidade</button>} /><div className="demand-intro"><div className="demand-intro-icon"><Users size={22} /></div><div><strong>{data.demands.length} entidades mapeadas</strong><span>Necessidades de espaço e propostas de atividades extraídas da aba Página2.</span></div><div className="intro-stat"><b>{data.demands.filter((item) => item.proposta).length}</b><span>com proposta registrada</span></div></div><div className="demand-grid">{data.demands.map((item, index) => <article className="demand-card" key={item.id}><div className="demand-card-top"><span className="demand-number">{String(index + 1).padStart(2, "0")}</span><span className="entity-avatar">{item.entidade.slice(0, 2).toUpperCase()}</span><button className="icon-button subtle" onClick={() => setDemandEditor(item)} aria-label={`Editar ${item.entidade}`}><Pencil size={15} /></button></div><h3>{item.entidade}</h3><div className="demand-block"><span className="block-label">Necessidade de espaço</span><p>{item.necessidade || "Não informado"}</p></div><div className="demand-block proposal"><span className="block-label">Proposta na INVENTUM</span><p>{item.proposta || "Não informado"}</p></div><button className="card-link" onClick={() => setDemandEditor(item)}>Editar registro <ArrowUpRight size={14} /></button></article>)}</div></section> : null}
 
-          {tab === "pending" ? <section className="content-section"><SectionTitle eyebrow="LISTA DE DECISÕES" title="Pendências" description="Transforme os pontos de atenção da planilha em uma fila clara de resolução." action={<div className="pending-progress"><div><b>{data.pending.filter((item) => item.concluida).length}/{data.pending.length}</b><span>resolvidas</span></div><div className="small-progress"><div style={{ width: `${percent(data.pending.filter((item) => item.concluida).length, data.pending.length)}%` }} /></div></div>} /><div className="pending-layout"><div className="pending-list-card">{data.pending.map((item) => <div className={`pending-row ${item.concluida ? "done" : ""}`} key={item.id}><button className="check-button" onClick={() => togglePending(item.id)} aria-label={item.concluida ? "Reabrir pendência" : "Marcar como concluída"}>{item.concluida ? <Check size={15} /> : null}</button><span className="pending-row-number">{String(item.id).padStart(2, "0")}</span><p>{item.texto}</p><span className={`pending-state ${item.concluida ? "done" : "open"}`}>{item.concluida ? "Concluída" : "Aberta"}</span></div>)}{data.pending.length === 0 ? <EmptyState title="Sem pendências" description="A base ainda não possui pontos de atenção." /> : null}</div><aside className="pending-aside"><div className="aside-orbit"><Target size={26} /></div><div className="eyebrow">COMO USAR</div><h3>Uma fila viva, não uma lista esquecida.</h3><p>Marque uma decisão como concluída assim que ela for resolvida. As mudanças aparecem para toda a equipe em tempo real.</p><div className="aside-note"><AlertCircle size={15} /><span>Use o backup JSON para guardar uma cópia de segurança periodicamente.</span></div></aside></div></section> : null}
+          {tab === "pending" ? <section className="content-section"><SectionTitle eyebrow="LISTA DE DECISÕES" title="Pendências" description="Transforme os pontos de atenção da planilha em uma fila clara de resolução." action={<div className="pending-progress"><div><b>{data.pending.filter((item) => item.concluida).length}/{data.pending.length}</b><span>resolvidas</span></div><div className="small-progress"><div style={{ width: `${percent(data.pending.filter((item) => item.concluida).length, data.pending.length)}%` }} /></div></div>} /><div className="pending-layout"><div className="pending-list-card">{data.pending.map((item) => <div className={`pending-row ${item.concluida ? "done" : ""}`} key={item.id}><button className="check-button" onClick={() => togglePending(item.id)} aria-label={item.concluida ? "Reabrir pendência" : "Marcar como concluída"}>{item.concluida ? <Check size={15} /> : null}</button><span className="pending-row-number">{String(item.id).padStart(2, "0")}</span><p>{item.texto}</p><input type="date" value={item.prazo ?? ""} onChange={(e) => updatePending({ ...item, prazo: e.target.value || null })} style={{ border: "1px solid var(--line)", borderRadius: 6, padding: "5px 7px", fontSize: 10, color: "#647278", background: "#fff" }} /><EditedByAvatar name={item.lastModifiedByName} avatarUrl={item.lastModifiedByAvatar} at={item.lastModifiedAt} /><span className={`pending-state ${item.concluida ? "done" : "open"}`}>{item.concluida ? "Concluída" : "Aberta"}</span></div>)}{data.pending.length === 0 ? <EmptyState title="Sem pendências" description="A base ainda não possui pontos de atenção." /> : null}</div><aside className="pending-aside"><div className="aside-orbit"><Target size={26} /></div><div className="eyebrow">COMO USAR</div><h3>Uma fila viva, não uma lista esquecida.</h3><p>Marque uma decisão como concluída assim que ela for resolvida. As mudanças aparecem para toda a equipe em tempo real.</p><div className="aside-note"><AlertCircle size={15} /><span>Use o backup JSON para guardar uma cópia de segurança periodicamente.</span></div></aside></div></section> : null}
         </div>
       </main>
       {activityEditor !== undefined ? <ActivityModal activity={activityEditor} frentes={data.frentes} onClose={() => setActivityEditor(undefined)} onSave={saveActivity} onCreateFrente={(nome) => addFrente(nome, FRENTE_COLORS[data.frentes.length % FRENTE_COLORS.length].key)} /> : null}
