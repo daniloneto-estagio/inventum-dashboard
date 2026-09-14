@@ -40,7 +40,7 @@ import { toast } from "sonner";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAuth } from "../contexts/AuthContext";
 import { useInventumData, type Activity, type Demand, type Frente } from "../lib/useInventumData";
-import { detectConflicts, type ConflictPair } from "../lib/conflicts";
+import { detectConflicts, findConflictsForDraft, type ConflictPair } from "../lib/conflicts";
 
 type Tab = "overview" | "activities" | "frentes" | "demands" | "pending" | "sponsors";
 
@@ -213,12 +213,14 @@ function EmptyState({ title, description }: { title: string; description: string
 function ActivityModal({
   activity,
   frentes,
+  activities,
   onClose,
   onSave,
   onCreateFrente,
 }: {
   activity: Activity | null;
   frentes: Frente[];
+  activities: Activity[];
   onClose: () => void;
   onSave: (value: Activity) => void;
   onCreateFrente: (nome: string) => Promise<Frente>;
@@ -253,6 +255,10 @@ function ActivityModal({
   const update = (key: keyof Activity, value: string) => setForm((current) => ({ ...current, [key]: value }));
   const toggleDay = (key: string) => setForm((current) => ({ ...current, dias: { ...current.dias, [key]: !current.dias[key] } }));
 
+  const liveConflicts = useMemo(() => findConflictsForDraft(form, activities), [form, activities]);
+  const sharedDaysLabel = (other: Activity) =>
+    eventDays.filter((day) => form.dias[day.key] && other.dias[day.key]).map((day) => day.weekday).join(", ");
+
   const createFrente = async () => {
     const nome = newFrenteName.trim();
     if (!nome) return;
@@ -280,6 +286,19 @@ function ActivityModal({
           </div>
           <button className="icon-button" onClick={onClose} aria-label="Fechar"><X size={18} /></button>
         </div>
+        {liveConflicts.length > 0 ? (
+          <div className="conflict-warning" role="alert">
+            <div className="conflict-warning-head"><AlertTriangle size={16} /><strong>Conflito de local e horário</strong></div>
+            <ul>
+              {liveConflicts.map((other) => (
+                <li key={other.id}>
+                  <b>{other.atividade || "Atividade sem nome"}</b> já ocupa <b>{other.local}</b>
+                  {other.horario ? ` (${other.horario})` : ""} em {sharedDaysLabel(other) || "dia(s) selecionado(s)"}.
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         <div className="form-grid">
           <label className="field field-span-2"><span>Atividade</span><input autoFocus value={form.atividade} onChange={(e) => update("atividade", e.target.value)} placeholder="Ex.: Oficina de inovação" /></label>
           <label className="field"><span>Tipo</span><select value={form.tipo} onChange={(e) => update("tipo", e.target.value)}><option>Mostra</option><option>Experiência</option><option>Oficina</option><option>Palestra</option><option>Competição</option><option>Institucional</option></select></label>
@@ -323,7 +342,19 @@ function ActivityModal({
           <label className="field field-span-2"><span>Infraestrutura</span><textarea rows={2} value={form.infraestrutura} onChange={(e) => update("infraestrutura", e.target.value)} /></label>
           <div className="field field-span-2"><span>Dias previstos</span><div className="day-selector">{eventDays.map((day) => <button key={day.key} type="button" className={form.dias[day.key] ? "selected" : ""} onClick={() => toggleDay(day.key)}><b>{day.weekday}</b><small>{day.label}</small></button>)}</div></div>
         </div>
-        <div className="modal-footer"><button className="button button-ghost" onClick={onClose}>Cancelar</button><button className="button button-dark" onClick={() => form.atividade.trim() ? onSave({ ...form, atividade: form.atividade.trim() }) : toast.error("Informe o nome da atividade")}>{activity ? "Salvar alterações" : "Adicionar atividade"}<ArrowUpRight size={16} /></button></div>
+        <div className="modal-footer">
+          <button className="button button-ghost" onClick={onClose}>Cancelar</button>
+          <button
+            className="button button-dark"
+            onClick={() => {
+              if (!form.atividade.trim()) { toast.error("Informe o nome da atividade"); return; }
+              if (liveConflicts.length > 0 && !window.confirm("Este horário e local conflitam com outra atividade. Salvar mesmo assim?")) return;
+              onSave({ ...form, atividade: form.atividade.trim() });
+            }}
+          >
+            {activity ? "Salvar alterações" : "Adicionar atividade"}<ArrowUpRight size={16} />
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -781,7 +812,7 @@ export default function Home() {
           {tab === "sponsors" ? <section className="content-section"><SectionTitle eyebrow="PROSPECÇÃO" title="Patrocinadores & expositores" description="Sincronizado automaticamente da planilha POTENCIAIS EXPOSITORES — edite direto na planilha, o site atualiza sozinho." /><div className="table-panel"><div className="table-meta"><span><b>{data.sponsors.length}</b> entidades em prospecção</span><span className="table-hint">Somente leitura aqui — edição é feita na planilha</span></div><div className="table-scroll"><table><thead><tr><th>Entidade</th><th>Interesse</th><th>Tipo</th><th>Estande potencial</th><th>Responsável</th><th>Proposta enviada</th><th>Contato</th><th>Observações</th></tr></thead><tbody>{data.sponsors.map((item) => <tr key={item.id}><td><b>{item.entidade}</b></td><td><span className={`status-pill status-${interesseTone(item.grauInteresse)}`}><span className="status-dot" />{item.grauInteresse || "—"}</span></td><td><span className="type-label">{item.tipoPotencial || "—"}</span></td><td><span className="type-label">{item.estandePotencial || "—"}</span></td><td><span className="type-label">{item.respContato || "—"}</span></td><td><span className="type-label">{item.envioProposta || "—"}</span></td><td><span className="type-label">{item.contato || "—"}</span></td><td><span className="type-label">{compactText(item.obs || item.obsExtra || "—", 60)}</span></td></tr>)}</tbody></table>{data.sponsors.length === 0 ? <EmptyState title="Nenhum patrocinador ainda" description="Configure o Apps Script na planilha POTENCIAIS EXPOSITORES para trazer os dados." /> : null}</div></div></section> : null}
         </div>
       </main>
-      {activityEditor !== undefined ? <ActivityModal activity={activityEditor} frentes={data.frentes} onClose={() => setActivityEditor(undefined)} onSave={saveActivity} onCreateFrente={(nome) => addFrente(nome, FRENTE_COLORS[data.frentes.length % FRENTE_COLORS.length].key)} /> : null}
+      {activityEditor !== undefined ? <ActivityModal activity={activityEditor} frentes={data.frentes} activities={data.activities} onClose={() => setActivityEditor(undefined)} onSave={saveActivity} onCreateFrente={(nome) => addFrente(nome, FRENTE_COLORS[data.frentes.length % FRENTE_COLORS.length].key)} /> : null}
       {demandEditor !== undefined ? <DemandModal demand={demandEditor} onClose={() => setDemandEditor(undefined)} onSave={saveDemand} /> : null}
     </div>
   );

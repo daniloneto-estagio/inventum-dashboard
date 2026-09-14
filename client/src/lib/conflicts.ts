@@ -31,6 +31,20 @@ function overlaps(a: [number, number], b: [number, number]) {
   return a[0] < b[1] && b[0] < a[1];
 }
 
+// Live check used by the activity form: which existing activities collide with
+// what the user is currently typing (same place, overlapping time, shared day)?
+export function findConflictsForDraft(draft: Activity, activities: Activity[]): Activity[] {
+  if (!draft.local || !draft.local.trim()) return [];
+  const draftLocal = draft.local.trim().toLowerCase();
+  const draftRange = resolveRange(draft.horario);
+  return activities.filter((other) => {
+    if (other.id === draft.id) return false;
+    if (!other.local || other.local.trim().toLowerCase() !== draftLocal) return false;
+    if (!overlaps(resolveRange(other.horario), draftRange)) return false;
+    return Object.keys(draft.dias).some((dayKey) => draft.dias[dayKey] && other.dias[dayKey]);
+  });
+}
+
 export function detectConflicts(activities: Activity[]): ConflictPair[] {
   const withLocation = activities.filter((item) => item.local && item.local.trim());
   const pairs: ConflictPair[] = [];
