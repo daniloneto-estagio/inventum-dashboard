@@ -24,6 +24,8 @@
  * Os campos que EXISTEM nas duas pontas (Situação, Status, Responsável, Horário,
  * dias marcados etc.) agora sincronizam nos dois sentidos — quem editou por último
  * (na planilha ou no site) é o que vale, até a próxima sincronização.
+ * Atividade/entidade criada direto no dashboard também gera uma linha nova na
+ * planilha (via pullFromSupabase) — não fica só no banco.
  */
 
 function syncAll() {
@@ -98,29 +100,55 @@ function pullAtividades_() {
     '08/11': '2026-11-08',
   };
 
-  values.forEach((row, i) => {
-    const nomeCol = col['Atividade'];
-    if (nomeCol == null) return;
-    const nome = String(row[nomeCol] || '').trim();
-    const data = byName[nome];
-    if (!data) return;
-    Object.keys(fieldMap).forEach((header) => {
-      const cIdx = col[header];
-      if (cIdx == null) return;
-      const novo = data[fieldMap[header]] || '';
-      if (String(row[cIdx] || '') !== String(novo)) {
-        sheet.getRange(i + 2, cIdx + 1).setValue(novo);
-      }
+  const nomeCol = col['Atividade'];
+  const matched = {};
+  if (nomeCol != null) {
+    values.forEach((row, i) => {
+      const nome = String(row[nomeCol] || '').trim();
+      const data = byName[nome];
+      if (!data) return;
+      matched[nome] = true;
+      Object.keys(fieldMap).forEach((header) => {
+        const cIdx = col[header];
+        if (cIdx == null) return;
+        const novo = data[fieldMap[header]] || '';
+        if (String(row[cIdx] || '') !== String(novo)) {
+          sheet.getRange(i + 2, cIdx + 1).setValue(novo);
+        }
+      });
+      Object.keys(dayMap).forEach((header) => {
+        const cIdx = col[header];
+        if (cIdx == null) return;
+        const novo = !!(data.dias && data.dias[dayMap[header]]);
+        if (isTrue_(row[cIdx]) !== novo) {
+          sheet.getRange(i + 2, cIdx + 1).setValue(novo);
+        }
+      });
     });
-    Object.keys(dayMap).forEach((header) => {
-      const cIdx = col[header];
-      if (cIdx == null) return;
-      const novo = !!(data.dias && data.dias[dayMap[header]]);
-      if (isTrue_(row[cIdx]) !== novo) {
-        sheet.getRange(i + 2, cIdx + 1).setValue(novo);
-      }
+  }
+
+  // Atividade criada no dashboard (não existia na planilha ainda): acrescenta
+  // como linha nova, senão ela nunca aparece na planilha.
+  if (nomeCol != null) {
+    const width = headers.length;
+    Object.keys(byName).forEach((nome) => {
+      if (matched[nome] || !nome.trim()) return;
+      const data = byName[nome];
+      const newRow = new Array(width).fill('');
+      newRow[nomeCol] = nome;
+      Object.keys(fieldMap).forEach((header) => {
+        const cIdx = col[header];
+        if (cIdx == null) return;
+        newRow[cIdx] = data[fieldMap[header]] || '';
+      });
+      Object.keys(dayMap).forEach((header) => {
+        const cIdx = col[header];
+        if (cIdx == null) return;
+        newRow[cIdx] = !!(data.dias && data.dias[dayMap[header]]);
+      });
+      sheet.appendRow(newRow);
     });
-  });
+  }
 }
 
 function pullDemandas_() {
@@ -150,21 +178,42 @@ function pullDemandas_() {
     'Proposta de atividades na INVENTUM': 'proposta',
   };
 
-  values.forEach((row, i) => {
-    const nomeCol = col['Entidade'];
-    if (nomeCol == null) return;
-    const nome = String(row[nomeCol] || '').trim();
-    const data = byName[nome];
-    if (!data) return;
-    Object.keys(fieldMap).forEach((header) => {
-      const cIdx = col[header];
-      if (cIdx == null) return;
-      const novo = data[fieldMap[header]] || '';
-      if (String(row[cIdx] || '') !== String(novo)) {
-        sheet.getRange(i + 2, cIdx + 1).setValue(novo);
-      }
+  const nomeCol = col['Entidade'];
+  const matched = {};
+  if (nomeCol != null) {
+    values.forEach((row, i) => {
+      const nome = String(row[nomeCol] || '').trim();
+      const data = byName[nome];
+      if (!data) return;
+      matched[nome] = true;
+      Object.keys(fieldMap).forEach((header) => {
+        const cIdx = col[header];
+        if (cIdx == null) return;
+        const novo = data[fieldMap[header]] || '';
+        if (String(row[cIdx] || '') !== String(novo)) {
+          sheet.getRange(i + 2, cIdx + 1).setValue(novo);
+        }
+      });
     });
-  });
+  }
+
+  // Entidade/demanda criada no dashboard (não existia na planilha ainda):
+  // acrescenta como linha nova, senão ela nunca aparece na planilha.
+  if (nomeCol != null) {
+    const width = headers.length;
+    Object.keys(byName).forEach((nome) => {
+      if (matched[nome] || !nome.trim()) return;
+      const data = byName[nome];
+      const newRow = new Array(width).fill('');
+      newRow[nomeCol] = nome;
+      Object.keys(fieldMap).forEach((header) => {
+        const cIdx = col[header];
+        if (cIdx == null) return;
+        newRow[cIdx] = data[fieldMap[header]] || '';
+      });
+      sheet.appendRow(newRow);
+    });
+  }
 }
 
 function getConfig_() {
