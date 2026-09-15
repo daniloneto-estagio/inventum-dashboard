@@ -243,6 +243,9 @@ function ActivityModal({
     dias: Object.fromEntries(eventDays.map((day) => [day.key, false])),
     frenteId: null,
     prazo: null,
+    dataInicio: null,
+    dataFim: null,
+    estimativaPublico: "",
     lastModifiedByEmail: null,
     lastModifiedByName: null,
     lastModifiedByAvatar: null,
@@ -254,6 +257,18 @@ function ActivityModal({
 
   const update = (key: keyof Activity, value: string) => setForm((current) => ({ ...current, [key]: value }));
   const toggleDay = (key: string) => setForm((current) => ({ ...current, dias: { ...current.dias, [key]: !current.dias[key] } }));
+
+  const toDatetimeLocal = (iso: string | null) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  const updateDatetime = (key: "dataInicio" | "dataFim", value: string) => {
+    const d = value ? new Date(value) : null;
+    setForm((current) => ({ ...current, [key]: d && !Number.isNaN(d.getTime()) ? d.toISOString() : null }));
+  };
 
   const liveConflicts = useMemo(() => findConflictsForDraft(form, activities), [form, activities]);
   const sharedDaysLabel = (other: Activity) =>
@@ -332,6 +347,9 @@ function ActivityModal({
           <label className="field"><span>Status operacional</span><input value={form.status} onChange={(e) => update("status", e.target.value)} placeholder="Ex.: Validado" /></label>
           <label className="field"><span>Horário</span><input value={form.horario} onChange={(e) => update("horario", e.target.value)} placeholder="Tempo todo ou faixa horária" /></label>
           <label className="field"><span>Prazo</span><input type="date" value={form.prazo ?? ""} onChange={(e) => setForm((current) => ({ ...current, prazo: e.target.value || null }))} /></label>
+          <label className="field"><span>Início (opcional)</span><input type="datetime-local" value={toDatetimeLocal(form.dataInicio)} onChange={(e) => updateDatetime("dataInicio", e.target.value)} /></label>
+          <label className="field"><span>Fim (opcional)</span><input type="datetime-local" value={toDatetimeLocal(form.dataFim)} onChange={(e) => updateDatetime("dataFim", e.target.value)} /></label>
+          <label className="field"><span>Estimativa de público</span><input value={form.estimativaPublico} onChange={(e) => update("estimativaPublico", e.target.value)} placeholder="Número aproximado" /></label>
           <label className="field field-span-2"><span>Local</span><input value={form.local} onChange={(e) => update("local", e.target.value)} placeholder="Centro de Eventos / área externa" /></label>
           <label className="field"><span>Tipo do local</span><input value={form.tipoLocal} onChange={(e) => update("tipoLocal", e.target.value)} placeholder="Interno" /></label>
           <label className="field"><span>Cód. mapa</span><input value={form.codigoMapa} onChange={(e) => update("codigoMapa", e.target.value)} placeholder="Ex.: 77, 78" /></label>
@@ -760,10 +778,13 @@ export default function Home() {
                 <div className="conflict-list">
                   {conflicts.map((pair, index) => {
                     const day = eventDays.find((d) => d.key === pair.dayKey);
+                    const when = pair.dayKey === "periodo" && pair.a.dataInicio
+                      ? new Date(pair.a.dataInicio).toLocaleString("pt-BR")
+                      : day ? `${day.label} ${day.weekday}` : pair.dayKey;
                     return (
                       <button className="conflict-row" key={`${pair.a.id}-${pair.b.id}-${pair.dayKey}-${index}`} onClick={() => { setTab("activities"); setLocationFilter(pair.a.local); }}>
                         <span><b>{pair.a.atividade}</b> e <b>{pair.b.atividade}</b></span>
-                        <span className="conflict-meta">{pair.a.local} · {day ? `${day.label} ${day.weekday}` : pair.dayKey}</span>
+                        <span className="conflict-meta">{pair.a.local} · {when}</span>
                       </button>
                     );
                   })}

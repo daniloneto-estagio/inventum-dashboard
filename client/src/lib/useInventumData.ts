@@ -29,6 +29,9 @@ export type Activity = {
   horario: string;
   dias: Record<string, boolean>;
   frenteId: number | null;
+  dataInicio: string | null;
+  dataFim: string | null;
+  estimativaPublico: string;
 } & AuditFields;
 
 export type Demand = { id: number; entidade: string; necessidade: string; proposta: string };
@@ -96,6 +99,9 @@ function activityFromRow(row: any): Activity {
     horario: row.horario,
     dias: row.dias ?? {},
     frenteId: row.frente_id,
+    dataInicio: row.data_inicio ?? null,
+    dataFim: row.data_fim ?? null,
+    estimativaPublico: row.estimativa_publico ?? "",
     ...auditFromRow(row),
   };
 }
@@ -118,6 +124,9 @@ function activityToRow(value: Activity) {
     dias: value.dias,
     frente_id: value.frenteId,
     prazo: value.prazo,
+    data_inicio: value.dataInicio,
+    data_fim: value.dataFim,
+    estimativa_publico: value.estimativaPublico,
   };
 }
 
