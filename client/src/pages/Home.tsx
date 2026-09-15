@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import {
   Activity as ActivityIcon,
   AlertCircle,
+  AlertTriangle,
   ArrowUpRight,
   Archive,
   Bell,
@@ -16,6 +17,7 @@ import {
   FileJson,
   Filter,
   Flag,
+  Handshake,
   Layers3,
   LayoutDashboard,
   ListFilter,
@@ -38,8 +40,18 @@ import { toast } from "sonner";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAuth } from "../contexts/AuthContext";
 import { useInventumData, type Activity, type Demand, type Frente } from "../lib/useInventumData";
+import { detectConflicts, findConflictsForDraft, type ConflictPair } from "../lib/conflicts";
 
-type Tab = "overview" | "activities" | "frentes" | "demands" | "pending";
+type Tab = "overview" | "activities" | "frentes" | "demands" | "pending" | "sponsors";
+
+function interesseTone(grau: string) {
+  const normalized = grau.toLowerCase();
+  if (normalized === "altissimo") return "green";
+  if (normalized === "alto") return "violet";
+  if (normalized === "médio" || normalized === "medio") return "amber";
+  if (normalized === "baixo") return "coral";
+  return "slate";
+}
 
 const eventDays = [
   { key: "2026-11-04", weekday: "QUA", label: "04 NOV" },
@@ -201,12 +213,14 @@ function EmptyState({ title, description }: { title: string; description: string
 function ActivityModal({
   activity,
   frentes,
+  activities,
   onClose,
   onSave,
   onCreateFrente,
 }: {
   activity: Activity | null;
   frentes: Frente[];
+  activities: Activity[];
   onClose: () => void;
   onSave: (value: Activity) => void;
   onCreateFrente: (nome: string) => Promise<Frente>;
@@ -241,6 +255,10 @@ function ActivityModal({
   const update = (key: keyof Activity, value: string) => setForm((current) => ({ ...current, [key]: value }));
   const toggleDay = (key: string) => setForm((current) => ({ ...current, dias: { ...current.dias, [key]: !current.dias[key] } }));
 
+  const liveConflicts = useMemo(() => findConflictsForDraft(form, activities), [form, activities]);
+  const sharedDaysLabel = (other: Activity) =>
+    eventDays.filter((day) => form.dias[day.key] && other.dias[day.key]).map((day) => day.weekday).join(", ");
+
   const createFrente = async () => {
     const nome = newFrenteName.trim();
     if (!nome) return;
@@ -268,6 +286,19 @@ function ActivityModal({
           </div>
           <button className="icon-button" onClick={onClose} aria-label="Fechar"><X size={18} /></button>
         </div>
+        {liveConflicts.length > 0 ? (
+          <div className="conflict-warning" role="alert">
+            <div className="conflict-warning-head"><AlertTriangle size={16} /><strong>Conflito de local e horário</strong></div>
+            <ul>
+              {liveConflicts.map((other) => (
+                <li key={other.id}>
+                  <b>{other.atividade || "Atividade sem nome"}</b> já ocupa <b>{other.local}</b>
+                  {other.horario ? ` (${other.horario})` : ""} em {sharedDaysLabel(other) || "dia(s) selecionado(s)"}.
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         <div className="form-grid">
           <label className="field field-span-2"><span>Atividade</span><input autoFocus value={form.atividade} onChange={(e) => update("atividade", e.target.value)} placeholder="Ex.: Oficina de inovação" /></label>
           <label className="field"><span>Tipo</span><select value={form.tipo} onChange={(e) => update("tipo", e.target.value)}><option>Mostra</option><option>Experiência</option><option>Oficina</option><option>Palestra</option><option>Competição</option><option>Institucional</option></select></label>
@@ -311,7 +342,19 @@ function ActivityModal({
           <label className="field field-span-2"><span>Infraestrutura</span><textarea rows={2} value={form.infraestrutura} onChange={(e) => update("infraestrutura", e.target.value)} /></label>
           <div className="field field-span-2"><span>Dias previstos</span><div className="day-selector">{eventDays.map((day) => <button key={day.key} type="button" className={form.dias[day.key] ? "selected" : ""} onClick={() => toggleDay(day.key)}><b>{day.weekday}</b><small>{day.label}</small></button>)}</div></div>
         </div>
-        <div className="modal-footer"><button className="button button-ghost" onClick={onClose}>Cancelar</button><button className="button button-dark" onClick={() => form.atividade.trim() ? onSave({ ...form, atividade: form.atividade.trim() }) : toast.error("Informe o nome da atividade")}>{activity ? "Salvar alterações" : "Adicionar atividade"}<ArrowUpRight size={16} /></button></div>
+        <div className="modal-footer">
+          <button className="button button-ghost" onClick={onClose}>Cancelar</button>
+          <button
+            className="button button-dark"
+            onClick={() => {
+              if (!form.atividade.trim()) { toast.error("Informe o nome da atividade"); return; }
+              if (liveConflicts.length > 0 && !window.confirm("Este horário e local conflitam com outra atividade. Salvar mesmo assim?")) return;
+              onSave({ ...form, atividade: form.atividade.trim() });
+            }}
+          >
+            {activity ? "Salvar alterações" : "Adicionar atividade"}<ArrowUpRight size={16} />
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -544,6 +587,17 @@ export default function Home() {
     return { confirmed, valid, activeDays, byType, byStatus, byFrente };
   }, [data.activities, data.frentes]);
 
+  const conflicts = useMemo(() => detectConflicts(data.activities), [data.activities]);
+
+  const conflictsByActivity = useMemo(() => {
+    const map = new Map<number, ConflictPair[]>();
+    conflicts.forEach((pair) => {
+      map.set(pair.a.id, [...(map.get(pair.a.id) ?? []), pair]);
+      map.set(pair.b.id, [...(map.get(pair.b.id) ?? []), pair]);
+    });
+    return map;
+  }, [conflicts]);
+
   const notifications = useMemo(() => {
     const matchesUser = (responsavel: string) => {
       if (!user) return false;
@@ -611,7 +665,7 @@ export default function Home() {
       try {
         const parsed = JSON.parse(String(reader.result));
         if (!Array.isArray(parsed.activities) || !Array.isArray(parsed.demands) || !Array.isArray(parsed.pending)) throw new Error("Formato inválido");
-        await importBackup({ frentes: parsed.frentes ?? [], activities: parsed.activities, demands: parsed.demands, pending: parsed.pending });
+        await importBackup({ frentes: parsed.frentes ?? [], activities: parsed.activities, demands: parsed.demands, pending: parsed.pending, sponsors: parsed.sponsors ?? [] });
         toast.success("Backup importado com sucesso");
       } catch {
         toast.error("Não foi possível importar este arquivo");
@@ -626,6 +680,7 @@ export default function Home() {
     { id: "frentes", label: "Frentes", icon: <Flag size={17} />, count: data.frentes.length },
     { id: "demands", label: "Entidades & demandas", icon: <Building2 size={17} />, count: data.demands.length },
     { id: "pending", label: "Pendências", icon: <Target size={17} />, count: data.pending.filter((item) => !item.concluida).length },
+    { id: "sponsors", label: "Patrocinadores", icon: <Handshake size={17} />, count: data.sponsors.length },
   ];
 
   if (loading) {
@@ -699,6 +754,22 @@ export default function Home() {
         <div className="page-content">
           {tab === "overview" ? <>
             <div className="hero-row"><div><div className="eyebrow">CENTRO DE COMANDO · ATUALIZAÇÃO PRELIMINAR</div><h1>Visão geral <span>da operação.</span></h1><p className="hero-copy">Uma leitura rápida do que está confirmado, do que está em movimento e do que ainda precisa de decisão.</p></div><div className="hero-actions"><button className="button button-dark" onClick={() => setActivityEditor(null)}><Plus size={16} /> Nova atividade</button></div></div>
+            {conflicts.length > 0 ? (
+              <div className="conflict-banner">
+                <div className="conflict-banner-head"><AlertTriangle size={16} /><strong>{conflicts.length} conflito{conflicts.length > 1 ? "s" : ""} de agenda detectado{conflicts.length > 1 ? "s" : ""}</strong></div>
+                <div className="conflict-list">
+                  {conflicts.map((pair, index) => {
+                    const day = eventDays.find((d) => d.key === pair.dayKey);
+                    return (
+                      <button className="conflict-row" key={`${pair.a.id}-${pair.b.id}-${pair.dayKey}-${index}`} onClick={() => { setTab("activities"); setLocationFilter(pair.a.local); }}>
+                        <span><b>{pair.a.atividade}</b> e <b>{pair.b.atividade}</b></span>
+                        <span className="conflict-meta">{pair.a.local} · {day ? `${day.label} ${day.weekday}` : pair.dayKey}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
             <div className="kpi-grid"><StatCard label="Atividades mapeadas" value={data.activities.length} sub="na programação preliminar" icon={<Layers3 size={18} />} accent="lime" trend="base" /><StatCard label="Confirmadas" value={`${percent(stats.confirmed, data.activities.length)}%`} sub={`${stats.confirmed} atividades com situação confirmada`} icon={<CheckCircle2 size={18} />} accent="blue" trend="+12%" /><StatCard label="Em análise" value={data.activities.length - stats.confirmed} sub="dependem de validação ou definição" icon={<Clock3 size={18} />} accent="coral" trend="atenção" /><StatCard label="Pendências abertas" value={data.pending.filter((item) => !item.concluida).length} sub={`${data.pending.filter((item) => item.concluida).length} resolvidas até agora`} icon={<Target size={18} />} accent="amber" trend="ação" /></div>
             <div className="dashboard-grid overview-grid">
               <section className="panel span-7"><div className="panel-heading"><div><div className="eyebrow">DISTRIBUIÇÃO</div><h3>Atividades por tipo</h3></div><span className="panel-note">{stats.byType.length} categorias</span></div><div className="bar-chart">{stats.byType.slice(0, 6).map((item, index) => <div className="bar-row" key={item.type}><div className="bar-label"><span>{item.type || "Sem tipo"}</span><b>{item.count}</b></div><div className="bar-track"><div className={`bar-fill fill-${index + 1}`} style={{ width: `${Math.max(7, percent(item.count, data.activities.length))}%` }} /></div></div>)}</div><div className="chart-footer"><span><i className="legend-dot lime" />Maior concentração: <b>{stats.byType[0]?.type || "—"}</b></span><button className="text-button" onClick={() => setTab("activities")}>Ver todas <ArrowUpRight size={14} /></button></div></section>
@@ -723,7 +794,7 @@ export default function Home() {
             </div>
           </> : null}
 
-          {tab === "activities" ? <section className="content-section"><SectionTitle eyebrow="MATRIZ OPERACIONAL" title="Atividades" description="Edite os registros da programação e acompanhe a situação de cada entrega." action={<button className="button button-dark" onClick={() => setActivityEditor(null)}><Plus size={16} /> Nova atividade</button>} /><div className="filter-bar"><div className="search-field"><Search size={17} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar atividade, local ou entidade…" /></div><div className="select-wrap"><Filter size={15} /><select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>{types.map((type) => <option key={type}>{type}</option>)}</select></div><div className="select-wrap"><Flag size={15} /><select value={frenteFilter} onChange={(e) => setFrenteFilter(e.target.value)}>{frenteFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div><div className="select-wrap"><MapPin size={15} /><select value={locationFilter} onChange={(e) => setLocationFilter(e.target.value)}>{locations.map((location) => <option key={location}>{location}</option>)}</select></div><div className="select-wrap"><CalendarDays size={15} /><select value={dayFilter} onChange={(e) => setDayFilter(e.target.value)}>{days.map((day) => <option key={day}>{day}</option>)}</select></div><div className="select-wrap"><CircleDot size={15} /><select value={situationFilter} onChange={(e) => setSituationFilter(e.target.value)}>{situations.map((situation) => <option key={situation}>{situation}</option>)}</select></div><div className="select-wrap"><ListFilter size={15} /><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>{statuses.map((status) => <option key={status}>{status}</option>)}</select></div>{(search || statusFilter !== "Todos os status" || typeFilter !== "Todos os tipos" || locationFilter !== "Todos os locais" || dayFilter !== "Todos os dias" || situationFilter !== "Todas as situações" || frenteFilter !== "all") ? <button className="clear-filter" onClick={() => { setSearch(""); setStatusFilter("Todos os status"); setTypeFilter("Todos os tipos"); setLocationFilter("Todos os locais"); setDayFilter("Todos os dias"); setSituationFilter("Todas as situações"); setFrenteFilter("all"); }}>Limpar</button> : null}</div><div className="table-panel"><div className="table-meta"><span><b>{filteredActivities.length}</b> de {data.activities.length} atividades</span><span className="table-hint"><Pencil size={13} /> Clique em editar para atualizar a base</span></div><div className="table-scroll"><table><thead><tr><th>Atividade</th><th>Frente</th><th>Tipo</th><th>Local</th><th>Dias</th><th>Prazo</th><th>Situação</th><th>Status operacional</th><th>Editado por</th><th /></tr></thead><tbody>{filteredActivities.map((item) => <tr key={item.id}><td><div className="activity-cell"><span className="activity-bullet" /><div><b>{item.atividade}</b><small>{item.realizadoPor || "Realizador não informado"}</small></div></div></td><td><FrenteBadge frente={item.frenteId ? frenteById.get(item.frenteId) : undefined} /></td><td><span className="type-label">{item.tipo || "—"}</span></td><td><div className="location-cell"><MapPin size={13} /><span>{compactText(item.local || "Local a definir", 36)}</span></div></td><td><div className="day-mini-list">{eventDays.map((day) => <span key={day.key} className={item.dias[day.key] ? "on" : ""}>{day.weekday.slice(0, 1)}</span>)}</div></td><td><PrazoBadge prazo={item.prazo} /></td><td><span className={`situation-tag ${item.situacao === "Confirmado" ? "confirmed" : "analysis"}`}>{item.situacao || "Sem situação"}</span></td><td><StatusPill value={item.status} /></td><td><EditedByAvatar name={item.lastModifiedByName} avatarUrl={item.lastModifiedByAvatar} at={item.lastModifiedAt} /></td><td><button className="row-edit" onClick={() => setActivityEditor(item)}><Pencil size={14} /> Editar</button></td></tr>)}</tbody></table>{filteredActivities.length === 0 ? <EmptyState title="Nenhum registro encontrado" description="Ajuste os filtros para ampliar a busca." /> : null}</div></div></section> : null}
+          {tab === "activities" ? <section className="content-section"><SectionTitle eyebrow="MATRIZ OPERACIONAL" title="Atividades" description="Edite os registros da programação e acompanhe a situação de cada entrega." action={<button className="button button-dark" onClick={() => setActivityEditor(null)}><Plus size={16} /> Nova atividade</button>} /><div className="filter-bar"><div className="search-field"><Search size={17} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar atividade, local ou entidade…" /></div><div className="select-wrap"><Filter size={15} /><select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>{types.map((type) => <option key={type}>{type}</option>)}</select></div><div className="select-wrap"><Flag size={15} /><select value={frenteFilter} onChange={(e) => setFrenteFilter(e.target.value)}>{frenteFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div><div className="select-wrap"><MapPin size={15} /><select value={locationFilter} onChange={(e) => setLocationFilter(e.target.value)}>{locations.map((location) => <option key={location}>{location}</option>)}</select></div><div className="select-wrap"><CalendarDays size={15} /><select value={dayFilter} onChange={(e) => setDayFilter(e.target.value)}>{days.map((day) => <option key={day}>{day}</option>)}</select></div><div className="select-wrap"><CircleDot size={15} /><select value={situationFilter} onChange={(e) => setSituationFilter(e.target.value)}>{situations.map((situation) => <option key={situation}>{situation}</option>)}</select></div><div className="select-wrap"><ListFilter size={15} /><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>{statuses.map((status) => <option key={status}>{status}</option>)}</select></div>{(search || statusFilter !== "Todos os status" || typeFilter !== "Todos os tipos" || locationFilter !== "Todos os locais" || dayFilter !== "Todos os dias" || situationFilter !== "Todas as situações" || frenteFilter !== "all") ? <button className="clear-filter" onClick={() => { setSearch(""); setStatusFilter("Todos os status"); setTypeFilter("Todos os tipos"); setLocationFilter("Todos os locais"); setDayFilter("Todos os dias"); setSituationFilter("Todas as situações"); setFrenteFilter("all"); }}>Limpar</button> : null}</div><div className="table-panel"><div className="table-meta"><span><b>{filteredActivities.length}</b> de {data.activities.length} atividades</span><span className="table-hint"><Pencil size={13} /> Clique em editar para atualizar a base</span></div><div className="table-scroll"><table><thead><tr><th>Atividade</th><th>Frente</th><th>Tipo</th><th>Local</th><th>Dias</th><th>Prazo</th><th>Situação</th><th>Status operacional</th><th>Editado por</th><th /></tr></thead><tbody>{filteredActivities.map((item) => <tr key={item.id}><td><div className="activity-cell"><span className="activity-bullet" /><div><b>{item.atividade}</b><small>{item.realizadoPor || "Realizador não informado"}</small></div></div></td><td><FrenteBadge frente={item.frenteId ? frenteById.get(item.frenteId) : undefined} /></td><td><span className="type-label">{item.tipo || "—"}</span></td><td><div className="location-cell"><MapPin size={13} /><span>{compactText(item.local || "Local a definir", 36)}</span>{conflictsByActivity.has(item.id) ? <span title={`Conflito de horário e local com ${conflictsByActivity.get(item.id)!.length} atividade(s)`}><AlertTriangle size={13} className="conflict-icon" /></span> : null}</div></td><td><div className="day-mini-list">{eventDays.map((day) => <span key={day.key} className={item.dias[day.key] ? "on" : ""}>{day.weekday.slice(0, 1)}</span>)}</div></td><td><PrazoBadge prazo={item.prazo} /></td><td><span className={`situation-tag ${item.situacao === "Confirmado" ? "confirmed" : "analysis"}`}>{item.situacao || "Sem situação"}</span></td><td><StatusPill value={item.status} /></td><td><EditedByAvatar name={item.lastModifiedByName} avatarUrl={item.lastModifiedByAvatar} at={item.lastModifiedAt} /></td><td><button className="row-edit" onClick={() => setActivityEditor(item)}><Pencil size={14} /> Editar</button></td></tr>)}</tbody></table>{filteredActivities.length === 0 ? <EmptyState title="Nenhum registro encontrado" description="Ajuste os filtros para ampliar a busca." /> : null}</div></div></section> : null}
 
           {tab === "frentes" ? (
             <FrentesManager
@@ -738,9 +809,10 @@ export default function Home() {
           {tab === "demands" ? <section className="content-section"><SectionTitle eyebrow="MAPA DE ARTICULAÇÃO" title="Entidades & demandas" description="Centralize o que cada parceiro precisa e o que está sendo proposto para a INVENTUM." action={<button className="button button-dark" onClick={() => setDemandEditor(null)}><Plus size={16} /> Nova entidade</button>} /><div className="demand-intro"><div className="demand-intro-icon"><Users size={22} /></div><div><strong>{data.demands.length} entidades mapeadas</strong><span>Necessidades de espaço e propostas de atividades extraídas da aba Página2.</span></div><div className="intro-stat"><b>{data.demands.filter((item) => item.proposta).length}</b><span>com proposta registrada</span></div></div><div className="demand-grid">{data.demands.map((item, index) => <article className="demand-card" key={item.id}><div className="demand-card-top"><span className="demand-number">{String(index + 1).padStart(2, "0")}</span><span className="entity-avatar">{item.entidade.slice(0, 2).toUpperCase()}</span><button className="icon-button subtle" onClick={() => setDemandEditor(item)} aria-label={`Editar ${item.entidade}`}><Pencil size={15} /></button></div><h3>{item.entidade}</h3><div className="demand-block"><span className="block-label">Necessidade de espaço</span><p>{item.necessidade || "Não informado"}</p></div><div className="demand-block proposal"><span className="block-label">Proposta na INVENTUM</span><p>{item.proposta || "Não informado"}</p></div><button className="card-link" onClick={() => setDemandEditor(item)}>Editar registro <ArrowUpRight size={14} /></button></article>)}</div></section> : null}
 
           {tab === "pending" ? <section className="content-section"><SectionTitle eyebrow="LISTA DE DECISÕES" title="Pendências" description="Transforme os pontos de atenção da planilha em uma fila clara de resolução." action={<div className="pending-progress"><div><b>{data.pending.filter((item) => item.concluida).length}/{data.pending.length}</b><span>resolvidas</span></div><div className="small-progress"><div style={{ width: `${percent(data.pending.filter((item) => item.concluida).length, data.pending.length)}%` }} /></div></div>} /><div className="pending-layout"><div className="pending-list-card">{data.pending.map((item) => <div className={`pending-row ${item.concluida ? "done" : ""}`} key={item.id}><button className="check-button" onClick={() => togglePending(item.id)} aria-label={item.concluida ? "Reabrir pendência" : "Marcar como concluída"}>{item.concluida ? <Check size={15} /> : null}</button><span className="pending-row-number">{String(item.id).padStart(2, "0")}</span><p>{item.texto}</p><input type="date" value={item.prazo ?? ""} onChange={(e) => updatePending({ ...item, prazo: e.target.value || null })} style={{ border: "1px solid var(--line)", borderRadius: 6, padding: "5px 7px", fontSize: 10, color: "#647278", background: "#fff" }} /><EditedByAvatar name={item.lastModifiedByName} avatarUrl={item.lastModifiedByAvatar} at={item.lastModifiedAt} /><span className={`pending-state ${item.concluida ? "done" : "open"}`}>{item.concluida ? "Concluída" : "Aberta"}</span></div>)}{data.pending.length === 0 ? <EmptyState title="Sem pendências" description="A base ainda não possui pontos de atenção." /> : null}</div><aside className="pending-aside"><div className="aside-orbit"><Target size={26} /></div><div className="eyebrow">COMO USAR</div><h3>Uma fila viva, não uma lista esquecida.</h3><p>Marque uma decisão como concluída assim que ela for resolvida. As mudanças aparecem para toda a equipe em tempo real.</p><div className="aside-note"><AlertCircle size={15} /><span>Use o backup JSON para guardar uma cópia de segurança periodicamente.</span></div></aside></div></section> : null}
+          {tab === "sponsors" ? <section className="content-section"><SectionTitle eyebrow="PROSPECÇÃO" title="Patrocinadores & expositores" description="Sincronizado automaticamente da planilha POTENCIAIS EXPOSITORES — edite direto na planilha, o site atualiza sozinho." /><div className="table-panel"><div className="table-meta"><span><b>{data.sponsors.length}</b> entidades em prospecção</span><span className="table-hint">Somente leitura aqui — edição é feita na planilha</span></div><div className="table-scroll"><table><thead><tr><th>Entidade</th><th>Interesse</th><th>Tipo</th><th>Estande potencial</th><th>Responsável</th><th>Proposta enviada</th><th>Contato</th><th>Observações</th></tr></thead><tbody>{data.sponsors.map((item) => <tr key={item.id}><td><b>{item.entidade}</b></td><td><span className={`status-pill status-${interesseTone(item.grauInteresse)}`}><span className="status-dot" />{item.grauInteresse || "—"}</span></td><td><span className="type-label">{item.tipoPotencial || "—"}</span></td><td><span className="type-label">{item.estandePotencial || "—"}</span></td><td><span className="type-label">{item.respContato || "—"}</span></td><td><span className="type-label">{item.envioProposta || "—"}</span></td><td><span className="type-label">{item.contato || "—"}</span></td><td><span className="type-label">{compactText(item.obs || item.obsExtra || "—", 60)}</span></td></tr>)}</tbody></table>{data.sponsors.length === 0 ? <EmptyState title="Nenhum patrocinador ainda" description="Configure o Apps Script na planilha POTENCIAIS EXPOSITORES para trazer os dados." /> : null}</div></div></section> : null}
         </div>
       </main>
-      {activityEditor !== undefined ? <ActivityModal activity={activityEditor} frentes={data.frentes} onClose={() => setActivityEditor(undefined)} onSave={saveActivity} onCreateFrente={(nome) => addFrente(nome, FRENTE_COLORS[data.frentes.length % FRENTE_COLORS.length].key)} /> : null}
+      {activityEditor !== undefined ? <ActivityModal activity={activityEditor} frentes={data.frentes} activities={data.activities} onClose={() => setActivityEditor(undefined)} onSave={saveActivity} onCreateFrente={(nome) => addFrente(nome, FRENTE_COLORS[data.frentes.length % FRENTE_COLORS.length].key)} /> : null}
       {demandEditor !== undefined ? <DemandModal demand={demandEditor} onClose={() => setDemandEditor(undefined)} onSave={saveDemand} /> : null}
     </div>
   );

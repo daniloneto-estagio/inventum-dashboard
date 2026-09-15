@@ -34,9 +34,35 @@ export type Activity = {
 export type Demand = { id: number; entidade: string; necessidade: string; proposta: string };
 export type Pending = { id: number; texto: string; concluida: boolean } & AuditFields;
 
-export type InventumData = { frentes: Frente[]; activities: Activity[]; demands: Demand[]; pending: Pending[] };
+export type Sponsor = {
+  id: number;
+  entidade: string;
+  grauInteresse: string;
+  tipoPotencial: string;
+  envioProposta: string;
+  estandePotencial: string;
+  obs: string;
+  respContato: string;
+  contrapartida: string;
+  contato: string;
+  datasContato: string;
+  forma: string;
+  membroGt: string;
+  ideia: string;
+  site: string;
+  principalAtracao: string;
+  obsExtra: string;
+};
 
-const EMPTY: InventumData = { frentes: [], activities: [], demands: [], pending: [] };
+export type InventumData = {
+  frentes: Frente[];
+  activities: Activity[];
+  demands: Demand[];
+  pending: Pending[];
+  sponsors: Sponsor[];
+};
+
+const EMPTY: InventumData = { frentes: [], activities: [], demands: [], pending: [], sponsors: [] };
 
 function frenteFromRow(row: any): Frente {
   return { id: row.id, nome: row.nome, cor: row.cor, ordem: row.ordem };
@@ -107,22 +133,47 @@ function pendingToRow(value: Pending) {
   return { texto: value.texto, concluida: value.concluida, prazo: value.prazo };
 }
 
+function sponsorFromRow(row: any): Sponsor {
+  return {
+    id: row.id,
+    entidade: row.entidade,
+    grauInteresse: row.grau_interesse,
+    tipoPotencial: row.tipo_potencial,
+    envioProposta: row.envio_proposta,
+    estandePotencial: row.estande_potencial,
+    obs: row.obs,
+    respContato: row.resp_contato,
+    contrapartida: row.contrapartida,
+    contato: row.contato,
+    datasContato: row.datas_contato,
+    forma: row.forma,
+    membroGt: row.membro_gt,
+    ideia: row.ideia,
+    site: row.site,
+    principalAtracao: row.principal_atracao,
+    obsExtra: row.obs_extra,
+  };
+}
+
 async function fetchAll(): Promise<InventumData> {
-  const [frentesRes, activitiesRes, demandsRes, pendingRes] = await Promise.all([
+  const [frentesRes, activitiesRes, demandsRes, pendingRes, sponsorsRes] = await Promise.all([
     supabase.from("frentes").select("*").order("ordem", { ascending: true }),
     supabase.from("activities").select("*").order("id", { ascending: true }),
     supabase.from("demands").select("*").order("id", { ascending: true }),
     supabase.from("pending").select("*").order("id", { ascending: true }),
+    supabase.from("sponsors").select("*").order("entidade", { ascending: true }),
   ]);
   if (frentesRes.error) throw frentesRes.error;
   if (activitiesRes.error) throw activitiesRes.error;
   if (demandsRes.error) throw demandsRes.error;
   if (pendingRes.error) throw pendingRes.error;
+  if (sponsorsRes.error) throw sponsorsRes.error;
   return {
     frentes: frentesRes.data.map(frenteFromRow),
     activities: activitiesRes.data.map(activityFromRow),
     demands: demandsRes.data.map(demandFromRow),
     pending: pendingRes.data.map(pendingFromRow),
+    sponsors: sponsorsRes.data.map(sponsorFromRow),
   };
 }
 
@@ -165,6 +216,7 @@ export function useInventumData(user: CurrentUser | null) {
       .on("postgres_changes", { event: "*", schema: "public", table: "activities" }, scheduleRefetch)
       .on("postgres_changes", { event: "*", schema: "public", table: "demands" }, scheduleRefetch)
       .on("postgres_changes", { event: "*", schema: "public", table: "pending" }, scheduleRefetch)
+      .on("postgres_changes", { event: "*", schema: "public", table: "sponsors" }, scheduleRefetch)
       .subscribe();
 
     return () => {
