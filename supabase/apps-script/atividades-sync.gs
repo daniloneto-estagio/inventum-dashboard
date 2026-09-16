@@ -21,11 +21,16 @@
  *
  * O que fica só no dashboard (a planilha nunca mexe nisso): frente associada, prazo
  * e quem editou por último — esses campos não existem na planilha.
- * Os campos que EXISTEM nas duas pontas (Situação, Status, Responsável, Horário,
- * dias marcados etc.) agora sincronizam nos dois sentidos — quem editou por último
- * (na planilha ou no site) é o que vale, até a próxima sincronização.
+ * Os campos que EXISTEM nas duas pontas (Confirmado, Status, Responsável, Horário,
+ * Início, Fim, Estimativa Público, dias marcados etc.) agora sincronizam nos dois
+ * sentidos — quem editou por último (na planilha ou no site) é o que vale, até a
+ * próxima sincronização. "Confirmado" é a coluna de status/situação da planilha
+ * (antes se chamava "Situação").
  * Atividade/entidade criada direto no dashboard também gera uma linha nova na
  * planilha (via pullFromSupabase) — não fica só no banco.
+ * "Início"/"Fim" são colunas de data/hora (opcionais, só pra atividades que têm
+ * um período real definido) usadas no site pra detectar conflito de agenda com
+ * mais precisão do que só o texto livre de "Horário".
  */
 
 function syncAll() {
@@ -55,11 +60,26 @@ function pullFromSupabase() {
   }
 }
 
+// Célula de data/hora do Sheets (Date real quando a coluna é formatada como
+// data, string em outros casos) -> ISO 8601, ou '' se vazia/inválida.
+function cellToIso_(value) {
+  if (value === '' || value === null || value === undefined) return '';
+  const d = value instanceof Date ? value : new Date(value);
+  return isNaN(d.getTime()) ? '' : d.toISOString();
+}
+
+// ISO 8601 (vindo do Supabase) -> Date real pra escrever na célula, ou '' se vazio.
+function isoToCell_(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? '' : d;
+}
+
 function pullAtividades_() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
   if (!sheet) return;
   const { url, key } = getConfig_();
-  const fields = 'atividade,tipo,realizado_por,tipo_local,local,codigo_mapa,detalhes,publico,infraestrutura,situacao,responsavel,status,horario,dias';
+  const fields = 'atividade,tipo,realizado_por,tipo_local,local,codigo_mapa,detalhes,publico,infraestrutura,situacao,responsavel,status,horario,dias,data_inicio,data_fim,estimativa_publico';
   const res = UrlFetchApp.fetch(`${url}/rest/v1/activities?select=${fields}`, {
     headers: { apikey: key, Authorization: `Bearer ${key}` },
     muteHttpExceptions: true,
@@ -87,10 +107,15 @@ function pullAtividades_() {
     'Detalhes': 'detalhes',
     'Público estimado': 'publico',
     'Infraestrutura': 'infraestrutura',
-    'Situação': 'situacao',
+    'Confirmado': 'situacao',
     'Responsável': 'responsavel',
     'Status': 'status',
     'Horário': 'horario',
+    'Estimativa Público': 'estimativa_publico',
+  };
+  const dateFieldMap = {
+    'Início': 'data_inicio',
+    'Fim': 'data_fim',
   };
   const dayMap = {
     '04/11': '2026-11-04',
@@ -114,6 +139,14 @@ function pullAtividades_() {
         const novo = data[fieldMap[header]] || '';
         if (String(row[cIdx] || '') !== String(novo)) {
           sheet.getRange(i + 2, cIdx + 1).setValue(novo);
+        }
+      });
+      Object.keys(dateFieldMap).forEach((header) => {
+        const cIdx = col[header];
+        if (cIdx == null) return;
+        const novoIso = data[dateFieldMap[header]] || '';
+        if (cellToIso_(row[cIdx]) !== novoIso) {
+          sheet.getRange(i + 2, cIdx + 1).setValue(isoToCell_(novoIso));
         }
       });
       Object.keys(dayMap).forEach((header) => {
@@ -140,6 +173,11 @@ function pullAtividades_() {
         const cIdx = col[header];
         if (cIdx == null) return;
         newRow[cIdx] = data[fieldMap[header]] || '';
+      });
+      Object.keys(dateFieldMap).forEach((header) => {
+        const cIdx = col[header];
+        if (cIdx == null) return;
+        newRow[cIdx] = isoToCell_(data[dateFieldMap[header]] || '');
       });
       Object.keys(dayMap).forEach((header) => {
         const cIdx = col[header];
@@ -310,10 +348,13 @@ function syncAtividades() {
         detalhes: String(r['Detalhes'] || ''),
         publico: String(r['Público estimado'] || ''),
         infraestrutura: String(r['Infraestrutura'] || ''),
-        situacao: String(r['Situação'] || ''),
+        situacao: String(r['Confirmado'] || ''),
         responsavel: String(r['Responsável'] || ''),
         status: String(r['Status'] || ''),
         horario: String(r['Horário'] || ''),
+        estimativa_publico: String(r['Estimativa Público'] || ''),
+        data_inicio: cellToIso_(r['Início']) || null,
+        data_fim: cellToIso_(r['Fim']) || null,
       };
       if (!foundDayColumns) return base;
       const dias = {};
